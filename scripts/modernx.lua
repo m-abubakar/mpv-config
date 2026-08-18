@@ -1219,7 +1219,11 @@ layouts = function ()
     -- area for show/hide: restrict to lower bottom region only
     -- show controls only when mouse moves near the bottom of the video
     local showhide_h = math.floor(osc_param.playresy * 0.18)
-    add_area('showhide', 0, posY - showhide_h, osc_param.playresx, posY)
+    add_area('showhide_bottom', 0, posY - showhide_h, osc_param.playresx, posY)
+
+    -- add an independent, small top hot-zone so OSC can also appear there
+    local showhide_top_h = math.max(2, math.floor(osc_param.playresy * 0.02))
+    add_area('showhide_top', 0, 0, osc_param.playresx, showhide_top_h)
 
     -- fetch values
     local osc_w, osc_h=
@@ -1889,10 +1893,18 @@ function show_osc()
     do
         local mouseX, mouseY = get_virt_mouse_pos()
         local inside = false
-        for _, a in ipairs(osc_param.areas['showhide'] or {}) do
+        for _, a in ipairs(osc_param.areas['showhide_bottom'] or {}) do
             if mouse_hit_coords_real(a.x1, a.y1, a.x2, a.y2) then
                 inside = true
                 break
+            end
+        end
+        if not inside then
+            for _, a in ipairs(osc_param.areas['showhide_top'] or {}) do
+                if mouse_hit_coords_real(a.x1, a.y1, a.x2, a.y2) then
+                    inside = true
+                    break
+                end
             end
         end
         if not inside and user_opts.visibility ~= 'always' and not state.osc_visible then
@@ -2081,9 +2093,16 @@ function render()
         state.anitype =  nil
     end
 
-    --mouse show/hide area
-    for k,cords in pairs(osc_param.areas['showhide']) do
-        set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, 'showhide')
+    --mouse show/hide areas (bottom and top)
+    if osc_param.areas['showhide_bottom'] then
+        for k,cords in pairs(osc_param.areas['showhide_bottom']) do
+            set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, 'showhide_bottom')
+        end
+    end
+    if osc_param.areas['showhide_top'] then
+        for k,cords in pairs(osc_param.areas['showhide_top']) do
+            set_virt_mouse_area(cords.x1, cords.y1, cords.x2, cords.y2, 'showhide_top')
+        end
     end
     if osc_param.areas['showhide_wc'] then
         for k,cords in pairs(osc_param.areas['showhide_wc']) do
@@ -2241,10 +2260,18 @@ function process_event(source, what)
         -- on-screen debug removed
         -- Only show OSC when the mouse movement occurs inside the showhide hot-zone
         local inside_showhide = false
-        for _, a in ipairs(osc_param.areas['showhide'] or {}) do
+        for _, a in ipairs(osc_param.areas['showhide_bottom'] or {}) do
             if mouse_hit_coords_real(a.x1, a.y1, a.x2, a.y2) then
                 inside_showhide = true
                 break
+            end
+        end
+        if not inside_showhide then
+            for _, a in ipairs(osc_param.areas['showhide_top'] or {}) do
+                if mouse_hit_coords_real(a.x1, a.y1, a.x2, a.y2) then
+                    inside_showhide = true
+                    break
+                end
             end
         end
 
@@ -2328,7 +2355,8 @@ function tick()
         set_osd(display_w, display_h, ass.text)
 
         if state.showhide_enabled then
-            mp.disable_key_bindings('showhide')
+            mp.disable_key_bindings('showhide_bottom')
+            mp.disable_key_bindings('showhide_top')
             mp.disable_key_bindings('showhide_wc')
             state.showhide_enabled = false
         end
@@ -2364,7 +2392,8 @@ end
 function do_enable_keybindings()
     if state.enabled then
         if not state.showhide_enabled then
-            mp.enable_key_bindings('showhide', 'allow-vo-dragging+allow-hide-cursor')
+            mp.enable_key_bindings('showhide_bottom', 'allow-vo-dragging+allow-hide-cursor')
+            mp.enable_key_bindings('showhide_top', 'allow-vo-dragging+allow-hide-cursor')
             mp.enable_key_bindings('showhide_wc', 'allow-vo-dragging+allow-hide-cursor')
         end
         state.showhide_enabled = true
@@ -2378,7 +2407,8 @@ function enable_osc(enable)
     else
         hide_osc() -- acts immediately when state.enabled == false
         if state.showhide_enabled then
-            mp.disable_key_bindings('showhide')
+            mp.disable_key_bindings('showhide_bottom')
+            mp.disable_key_bindings('showhide_top')
             mp.disable_key_bindings('showhide_wc')
         end
         state.showhide_enabled = false
@@ -2484,7 +2514,11 @@ end)
 mp.set_key_bindings({
     {'mouse_move',              function(e) process_event('mouse_move', nil) end},
     {'mouse_leave',             mouse_leave},
-}, 'showhide', 'force')
+}, 'showhide_bottom', 'force')
+mp.set_key_bindings({
+    {'mouse_move',              function(e) process_event('mouse_move', nil) end},
+    {'mouse_leave',             mouse_leave},
+}, 'showhide_top', 'force')
 mp.set_key_bindings({
     {'mouse_move',              function(e) process_event('mouse_move', nil) end},
     {'mouse_leave',             mouse_leave},
