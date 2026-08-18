@@ -143,6 +143,9 @@ local osc_param = { -- calculated by osc_init()
     areas = {},
 }
 
+-- debug overlay disabled in production
+local debug_draw_showhide = false
+
 local osc_styles = {
     TransBg = '{\\blur100\\bord150\\1c&H000000&\\3c&H000000&}',
     SeekbarBg = '{\\blur0\\bord0\\1c&HFFFFFF&}',
@@ -208,7 +211,6 @@ local thumbfast = {
 local window_control_box_width = 138
 local tick_delay = 0.03
 
-local is_december = os.date("*t").month == 12
 
 --- Automatically disable OSC
 local builtin_osc_enabled = mp.get_property_native('osc')
@@ -355,6 +357,17 @@ end
 function mouse_hit_coords(bX1, bY1, bX2, bY2)
     local mX, mY = get_virt_mouse_pos()
     return (mX >= bX1 and mX <= bX2 and mY >= bY1 and mY <= bY2)
+end
+
+-- Check using real mouse (pixel) coordinates and scale factors to avoid
+-- mismatches between virtual ASS coords and windowed OSD scaling.
+local function mouse_hit_coords_real(bX1, bY1, bX2, bY2)
+    local mx_real, my_real = mp.get_mouse_pos()
+    if not mx_real or not my_real then return false end
+    local sx, sy = get_virt_scale_factor()
+    if sx == 0 or sy == 0 then return false end
+    local rx1, ry1, rx2, ry2 = bX1 / sx, bY1 / sy, bX2 / sx, bY2 / sy
+    return (mx_real >= rx1 and mx_real <= rx2 and my_real >= ry1 and my_real <= ry2)
 end
 
 function limit_range(min, max, val)
@@ -1203,8 +1216,10 @@ layouts = function ()
     -- area for active mouse input
     add_area('input', get_hitbox_coords(posX, posY, 1, osc_geo.w, 104))
 
-    -- area for show/hide
-    add_area('showhide', 0, 0, osc_param.playresx, osc_param.playresy)
+    -- area for show/hide: restrict to lower bottom region only
+    -- show controls only when mouse moves near the bottom of the video
+    local showhide_h = math.floor(osc_param.playresy * 0.18)
+    add_area('showhide', 0, posY - showhide_h, osc_param.playresx, posY)
 
     -- fetch values
     local osc_w, osc_h=
@@ -1867,8 +1882,23 @@ end
 function show_osc()
     -- show when disabled can happen (e.g. mouse_move) due to async/delayed unbinding
     if not state.enabled then return end
-
     msg.trace('show_osc')
+    -- Only allow showing the OSC when the mouse is inside the configured
+    -- showhide hot-zone, unless global visibility is 'always' or OSC is
+    -- already visible.
+    do
+        local mouseX, mouseY = get_virt_mouse_pos()
+        local inside = false
+        for _, a in ipairs(osc_param.areas['showhide'] or {}) do
+            if mouse_hit_coords_real(a.x1, a.y1, a.x2, a.y2) then
+                inside = true
+                break
+            end
+        end
+        if not inside and user_opts.visibility ~= 'always' and not state.osc_visible then
+            return
+        end
+    end
     --remember last time of invocation (mouse move)
     state.showtime = mp.get_time()
 
@@ -1913,15 +1943,18 @@ end
 function pause_state(name, enabled)
     state.paused = enabled
     mp.add_timeout(0.1, function() state.osd:update() end) 
-    if user_opts.showonpause then
-		if enabled then
-			state.lastvisibility = user_opts.visibility
-			visibility_mode("always", true)
-			show_osc()
-		else
-			visibility_mode(state.lastvisibility, true)
-		end
-	end
+    -- When paused, hide OSC but keep OSC enabled so mouse_move in the
+    -- showhide area (lower bottom) can still trigger it. Restore previous
+    -- visibility when unpaused.
+    if enabled then
+        state.lastvisibility = user_opts.visibility
+        hide_osc()
+    else
+        if state.lastvisibility then
+            visibility_mode(state.lastvisibility, true)
+            state.lastvisibility = nil
+        end
+    end
     request_tick()
 end
 
@@ -2129,6 +2162,8 @@ function render()
     -- actual rendering
     local ass = assdraw.ass_new()
 
+    -- debug overlay disabled
+
     -- Messages
     render_message(ass)
 
@@ -2203,12 +2238,24 @@ function process_event(source, what)
         state.mouse_in_window = true
 
         local mouseX, mouseY = get_virt_mouse_pos()
-        if (user_opts.minmousemove == 0) or
+        -- on-screen debug removed
+        -- Only show OSC when the mouse movement occurs inside the showhide hot-zone
+        local inside_showhide = false
+        for _, a in ipairs(osc_param.areas['showhide'] or {}) do
+            if mouse_hit_coords_real(a.x1, a.y1, a.x2, a.y2) then
+                inside_showhide = true
+                break
+            end
+        end
+
+        if inside_showhide and (
+            user_opts.minmousemove == 0 or
             (not ((state.last_mouseX == nil) or (state.last_mouseY == nil)) and
                 ((math.abs(mouseX - state.last_mouseX) >= user_opts.minmousemove)
                     or (math.abs(mouseY - state.last_mouseY) >= user_opts.minmousemove)
                 )
-            ) then
+            )
+        ) then
             show_osc()
         end
         state.last_mouseX, state.last_mouseY = mouseX, mouseY
@@ -2272,14 +2319,6 @@ function tick()
             end
         end
 
-        -- Santa hat
-        if is_december and user_opts.idlescreen and not user_opts.greenandgrumpy then
-            for i, line in ipairs(santa_hat_lines) do
-                ass:new_event()
-                ass:append(line_prefix .. line)
-            end
-        end
-   
         if user_opts.idlescreen then
             ass:new_event()
             ass:pos(display_w / 2, icon_y + 65)
